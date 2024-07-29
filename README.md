@@ -25,4 +25,20 @@ Previous studies which proposed texture-structure separation methods, including 
 The fact that this method does not utilize any machine learning related algorithms, but only adopts some classical image processing techniques, 
 while is still able to create extremely good results with extremely good generalization ability compared to other state-of-the-art methods, make it really interesting and inspiring.
 
+## Sample result
+Here is one example of the result of my implementation.
 
+<div style="display: flex; justify-content: space-around;">
+  <img src="images/sample_input.png" alt="Sample Input" width="150" height="210">
+  <img src="images/sample_result.png" alt="Sample Result" width="150" height="210">
+  <img src="images/sample_my_result.png" alt="My Result" width="150" height="210">
+</div>
+
+[Left]: Sample input image obtained from the original paper.
+
+[Center]: Sample output image obtained from the original paper.
+
+[Right]: Sample output image of my own implementation.
+
+Note that I couldn't create exactly the same result using parameters provided in the paper. (Maybe there are some minor differences in the implementation.)
+Typically using larger sigma space (2~3 times larger) can output similar results shown in the paper. The sample output image here used sigma space as 10 (5 in the original paper).
