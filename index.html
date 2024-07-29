@@ -355,7 +355,7 @@ function init() {
         showProcessing(0);
       }, 0);
     };
-    document.getElementById("img_original").src = "https://cdn.glitch.com/1214143e-0c44-41fb-b1ad-e9aa3347cdaa%2Frock.png?v=1562148154890";
+    document.getElementById("img_original").src = "./images/sample_input.png";
 };
 </script>
   
@@ -365,8 +365,10 @@ function init() {
   <h3>Pyramid Texture Filtering</h3>
    <ul>
      <li>This is the demo webpage for Visual Media (2024) final assignment.</li>
-     <li>Pyramid Texture Filtering Qing Zhang,  Hao Jiang,  Yongwei Nie,  Wei-Shi Zheng </li>
-     <li>ACM Transactions on Graphics (Proceedings of SIGGRAPH 2023) https://rewindl.github.io/pyramid_texture_filtering/</li>
+     <li>Reference: Qing Zhang, Hao Jiang, Yongwei Nie, and Wei-Shi Zheng. Pyramid Texture Filtering. ACM Transactions on Graphics (Proceedings of SIGGRAPH 2023)</li>
+     <li>Press "Apply Pyramid Texture Filtering" button to see the result. (The calculation may take over 30s depending on the size of parameters.)</li>
+     <li>You can also upload your own image and try to adjust parameters.</li>
+     <li>Sample image from the Github repository of the original paper.</li>
   </ul>
   <table><tr valign="top">
     <td align="center"><img id="img_original" crossorigin="anonymous"><br>Original</td>
@@ -378,21 +380,30 @@ function init() {
     <li>Downsampling rate (scale): <input type="number" id="input_num_ptf_scale" step="0.1" min="0.1" max="0.9" value="0.5"></li>
     <li>Sigma space (JBF): <input type="number" id="input_num_ptf_ss" step="1" min="1" value="10"></li>
     <li>(Normalized) Sigma range (JBF): <input type="number" id="input_num_ptf_sr" step="0.01" min="0.01" value="0.07"></li>
-    <li><button id="btn_use_ptf">Apply Pyramid Texture Filtering</button> (The calculation may take over 30s depending on the size of parameters.)</li>
+    <li><button id="btn_use_ptf">Apply Pyramid Texture Filtering</button></li>
+    <li>Note that I couldn't create exactly the same result using parameters provided in the paper. (Maybe there are some minor differences in the implementation.)</li> 
+    <li>Typically using larger Sigma space (JBF) (2~3 times larger) can output similar results shown in the paper.</li>
   </ul>
   
   <h3>Detailed Process of Pyramid Texture Filtering</h3>
   <ul>
-    <li>Gaussian Pyramid</li>
-    <div id="g_pyramid_container"></div>
-    <li>Laplacian Pyramid</li>
-    <div id="l_pyramid_container"></div>
-    <li>After Joint Bilateral Upsampling</li>
-    <div id="ri_pyramid_container"></div>
-    <li>Add with Laplacian pyramid image</li>
-    <div id="rc_pyramid_container"></div>
-    <li>Results after Joint Bilateral Filtering</li>
-    <div id="r_pyramid_container"></div>
+    <li>Construct Gaussian and Laplacian Pyramid:</li>
+    <ul>
+        <li>Gaussian Pyramid</li>
+        <div id="g_pyramid_container"></div>
+        <li>Laplacian Pyramid</li>
+        <div id="l_pyramid_container"></div>
+    </ul>
+    
+    <li>Pyramid-guided Structure-aware Upsampling (PSU):</li>
+    <ul>
+        <li>After Joint Bilateral Upsampling</li>
+        <div id="ri_pyramid_container"></div>
+        <li>Add with Laplacian pyramid image</li>
+        <div id="rc_pyramid_container"></div>
+        <li>Results after Joint Bilateral Filtering</li>
+        <div id="r_pyramid_container"></div>
+    </ul>   
   </ul>
 </body>
 </html>
