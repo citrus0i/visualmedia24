@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title id="title">Final Assignment for Visual Media (2024)</title>
+  
+<script type="text/javascript">
+var canvas = document.createElement("canvas");
+var context = canvas.getContext("2d");
+  
+// Pyramid Texture Filtering
+// Reference: [Zhang 23] Pyramid Texture Filtering
+function pyramid_texture_filtering(width, height, original, result, sigma_space, sigma_range, scale) {
+    // depth: number of levels in pyramid
+    // from the papaer: "empirically limit the long axis of the coarsest Gaussian pyramid level to [32, 64) to set the pyramid depth"
+    var depth = 1;
+    var long_axis = Math.max(width, height);
+    while (long_axis >= 64) {
+        long_axis *= scale;
+        depth += 1;
+    }
+   
+    var { gaussian: G, laplacian: L} = construct_pyramid(width, height, original, depth, scale);
+    // console.log(G,L);
+  
+    // pyramid-guided structure-aware upsampling (PSU)
+    // upsample from the coarsest Gaussian pyramid level Gn (Gn = Rn)
+    var R = new Array(depth).fill({ image: new Float32Array(), width: 0, height: 0 });
+    var N = depth - 1;
+    R[N] = G[N];
+  
+    var R_U = new Array(N).fill({ image: new Float32Array(), width: 0, height: 0 });
+    var R_I = new Array(N).fill({ image: new Float32Array(), width: 0, height: 0 });
+    var R_C = new Array(N).fill({ image: new Float32Array(), width: 0, height: 0 });
+    
+    for (var l = N - 1; l >= 0; l--) {
+        // calculate scale-adaptive sigma space (= sigma_space / 2^k)
+        var adaptive_sigma = sigma_space * Math.pow(0.5, l);
+        // console.log("sigma", adaptive_sigma);
+      
+        // calculate neighborhood size
+        // odd values closest to max(sigma, 3) and max(4*sigma, 3)
+        var r1 = Math.max(3, adaptive_sigma);
+        r1 = Math.floor(r1) % 2 == 0 ? Math.floor(r1 - 1) : Math.floor(r1);
+        var r2 = Math.max(3, 4 * adaptive_sigma);
+        r2 = Math.floor(r2) % 2 == 0 ? Math.floor(r2 - 1) : Math.floor(r2);
+        // console.log("r1, r2", r1, r2);
+      
+        // JBF_up: joint bilateral upsampling
+        // upsample R_k using bilinear resizing
+        var R_upsampled = resize(R[l + 1].width, R[l + 1].height, R[l + 1].image, G[l].width, G[l].height);
+        // console.log("upsampled", R_upsampled);
+        R_U[l] = { image: R_upsampled, width: G[l].width, height: G[l].height };
+      
+        // JBF: original=R_upsampled, guide=gasussian[l]
+        var R_intermediate = JBF(G[l].width, G[l].height, R_upsampled, G[l].image, adaptive_sigma, sigma_range * 255 , r1);
+        // console.log("intermediate", R_intermediate);
+        R_I[l] = { image: R_intermediate, width: G[l].width, height: G[l].height };
+
+        // add R_intermediate with Laplacian pyramid image
+        var R_combined = new Float32Array(G[l].width * G[l].height * 4);
+        for (var i = 0; i <= R_combined.length; i++) {
+            if  (i % 4 == 3) R_combined[i] = 255;
+            R_combined[i] = R_intermediate[i] + L[l].image[i] - 128;
+        }
+        // console.log("combined", R_combined);
+        R_C[l] = { image: R_combined, width: G[l].width, height: G[l].height };
+      
+        // JBF: original=R_combined, guide=R_intermediate
+        var R_result = JBF(G[l].width, G[l].height, R_combined, R_intermediate, adaptive_sigma, sigma_range * 255 , r2);
+        // console.log("result", R_result);
+        R[l] = { image: R_result, width: G[l].width, height: G[l].height };
+    }
+    // console.log(R);
+    for (var i = 0; i < R[0].image.length; i++) {
+        result[i] = Math.round(R[0].image[i]);
+    }
+    // console.log("final", result);
+    return { gaussian: G, laplacian: L, results: R,
+             R_upsampled: R_U, R_intermediate: R_I, R_combined: R_C};
+};
+  
+// joint bilateral filter
+function JBF(width, height, original, guide, sigma_space, sigma_range, r) {
+    var filtered = new Float32Array(width * height * 4);
+    var kernel = gaussian_kernel(2 * r + 1, sigma_space);
+  
+    for (var y = 0; y < height; y++) {
+    for (var x = 0; x < width;  x++) {
+        var idx0 = (x + width * y) * 4;
+        var r_sum = 0;
+        var g_sum = 0;
+        var b_sum = 0;
+        var w_sum = 0;
+        var r0 = guide[idx0];
+        var g0 = guide[idx0 + 1];
+        var b0 = guide[idx0 + 2];
+      
+        for (var dy = -r; dy <= r; dy++) {
+        for (var dx = -r; dx <= r; dx++) {
+            var px = Math.min(Math.max(0, Math.abs(x + dx)), width - 1);
+            var py = Math.min(Math.max(0, Math.abs(y + dy)), height - 1);
+
+            var w_space = kernel.data[dy + r][dx + r];
+            var idx1 = (px + width * py) * 4;
+          
+            var r1 = guide[idx1];
+            var g1 = guide[idx1 + 1];
+            var b1 = guide[idx1 + 2];
+          
+            var color_distance = (r1-r0)*(r1-r0) + (g1-g0)*(g1-g0) + (b1-b0)*(b1-b0);
+            var w_range = Math.exp(- color_distance / (2 * sigma_range * sigma_range));
+            var w = w_space * w_range;
+            
+            r_sum += w * original[idx1];
+            g_sum += w * original[idx1 + 1];
+            b_sum += w * original[idx1 + 2];
+            w_sum += w;
+        }}
+        
+        filtered[idx0    ] = r_sum / w_sum;
+        filtered[idx0 + 1] = g_sum / w_sum;
+        filtered[idx0 + 2] = b_sum / w_sum;
+        filtered[idx0 + 3] = 255;
+        // filtered[idx0 + 3] = original[idx0 + 3];
+    }}
+    return filtered;
+};
+
+// construct Gaussian pyramid: repeatedly downsample the image
+// construct Laplacian pyramid: subtract the upsampled version of downsampled image from original image
+// sigma for gaussian kernel is set to be 1.0
+function construct_pyramid(width, height, image, depth, scale) {
+    var G = new Array(depth);
+    var L = new Array(depth - 1);
+    var kernel = gaussian_kernel(5, 1.0);
+    
+    // original image is assigned to 1st level of gaussian pyramid
+    G[0] = { image: image, width: width, height: height };
+
+    for (var l = 0; l < depth - 1; l++) {
+        // create downsampled image (for Gaussian pyramid)
+        var filtered = gaussian_filter(G[l].width, G[l].height, G[l].image, kernel);
+        var downsample_width = Math.floor(G[l].width * scale);
+        var downsample_height = Math.floor(G[l].height * scale);
+        var downsampled = resize(G[l].width, G[l].height, filtered, downsample_width, downsample_height);
+
+        // create upsampled version of downsampled image (for Laplacian pyramid)
+        var upsampled = resize(downsample_width, downsample_height, downsampled, G[l].width, G[l].height);
+        upsampled = gaussian_filter(G[l].width, G[l].height, upsampled, kernel);
+        // subtract it from original image
+        var lap = new Float32Array(G[l].image.length);
+        for (var i = 0; i < lap.length; i++) {
+            if (i % 4 == 3) lap[i] = 255;
+            else lap[i] = 128 + G[l].image[i] - upsampled[i];  // +128 for display purpose, will -128 when do real calculation
+            
+        }
+        G[l + 1] = { image: downsampled, width: downsample_width, height: downsample_height };
+        L[l] = { image: lap, width: G[l].width, height: G[l].height };
+    }
+    return { gaussian: G, laplacian: L};
+};
+
+// construct gaussian kernel
+// size: width (height) of gaussian kernel
+function gaussian_kernel(size, sigma) {
+    var r = Math.floor(size / 2);
+    var kernel = [];
+    var w = 0;
+    
+    for (var dy = -r; dy <= r; dy++) {
+        var row = [];
+        for (var dx = -r; dx <= r; dx++)
+        {
+            var value = Math.exp(-(dx * dx + dy * dy) / (2 * sigma * sigma));
+            w += value;
+            row.push(value);
+        }
+        kernel.push(row);
+    }
+    
+    for (var y = 0; y < size; y++) {
+        for (var x = 0; x < size; x++) {
+        kernel[y][x] /= w;
+        }
+    }
+
+    return { data: kernel, size: size };
+};
+
+// apply gaussian filter to an image
+function gaussian_filter(width, height, image, kernel) {
+    var filtered = new Float32Array(width * height * 4);
+    var r = Math.floor(kernel.size / 2);
+
+    for (var y = 0; y < height; y++) {
+    for (var x = 0; x < width;  x++) {
+        var idx0 = (x + width * y) * 4;
+        var r_sum = 0;
+        var g_sum = 0;
+        var b_sum = 0;
+        for (var dy = -r; dy <= r; dy++) {
+        for (var dx = -r; dx <= r; dx++) {
+            var px = Math.min(Math.max(0, Math.abs(x + dx)), width - 1);
+            var py = Math.min(Math.max(0, Math.abs(y + dy)), height - 1);
+            var w = kernel.data[dy + r][dx + r];
+            var idx1 = (px + width * py) * 4;
+            r_sum += w * image[idx1];
+            g_sum += w * image[idx1 + 1];
+            b_sum += w * image[idx1 + 2];
+        }}
+        
+        filtered[idx0    ] = r_sum;
+        filtered[idx0 + 1] = g_sum;
+        filtered[idx0 + 2] = b_sum;
+        filtered[idx0 + 3] = 255;
+        // filtered[idx0 + 3] = image[idx0 + 3];
+    }}
+    return filtered;
+};
+
+// resize (down/upsample) an image using bilinear interpolation
+function resize(src_width, src_height, src_image, dst_width, dst_height) {
+    var dst_image = new Float32Array(dst_width * dst_height * 4);
+    for (var y = 0; y < dst_height; y++)
+    for (var x = 0; x < dst_width; x++) {
+        var src_x = x * (src_width / dst_width);
+        var src_y = y * (src_height / dst_height)
+        
+        var x1 = Math.floor(src_x);
+        var y1 = Math.floor(src_y);
+        var x2 = Math.min(x1 + 1, src_width - 1);
+        var y2 = Math.min(y1 + 1, src_height - 1);
+        
+        var dx = src_x - x1;
+        var dy = src_y - y1;
+        
+        var p1 = (y1 * src_width + x1) * 4;
+        var p2 = (y1 * src_width + x2) * 4;
+        var p3 = (y2 * src_width + x1) * 4;
+        var p4 = (y2 * src_width + x2) * 4;
+        for (var i = 0; i < 4; i++) {
+            dst_image[(y * dst_width + x) * 4 + i] = (
+                src_image[p1 + i] * (1 - dx) * (1 - dy) +
+                src_image[p2 + i] * dx * (1 - dy) +
+                src_image[p3 + i] * (1 - dx) * dy +
+                src_image[p4 + i] * dx * dy
+            );
+        }
+    }
+    return dst_image;
+};
+  
+function updateCanvas(container, id, image, width, height) {
+    var canvas = document.createElement('canvas');
+    canvas.id = id;
+    canvas.width = width;
+    canvas.height = height;
+    var ctx = canvas.getContext('2d');
+    var show = ctx.createImageData(width, height);
+    for (let i = 0; i < image.length; i++) {
+        show.data[i] = image[i];
+    }
+    ctx.putImageData(show, 0, 0);
+    container.appendChild(canvas);
+};
+  
+function showProcessing(show) {
+    var processingDiv = document.getElementById("processing");
+    if (!processingDiv) {
+        processingDiv = document.createElement("div");
+        processingDiv.id = "processing";
+        processingDiv.style.position = "fixed";
+        processingDiv.style.top = "50%";
+        processingDiv.style.left = "50%";
+        processingDiv.style.transform = "translate(-50%, -50%)";
+        processingDiv.style.padding = "20px";
+        processingDiv.style.background = "rgba(0,0,0,0.7)";
+        processingDiv.style.color = "white";
+        processingDiv.style.borderRadius = "10px";
+        processingDiv.style.display = "none";
+        document.body.appendChild(processingDiv);
+    }
+    processingDiv.textContent = "Processing...";
+    processingDiv.style.display = show ? "block" : "none";
+};
+
+function init() {
+    document.getElementById("img_original").onload = function(){
+        canvas.width  = this.width;
+        canvas.height = this.height;
+        document.getElementById("img_result").width  = this.width;
+        document.getElementById("img_result").height = this.height;
+    };
+    document.getElementById("input_file_original").onchange = function(evt) {
+        var reader = new FileReader();
+        reader.readAsDataURL(evt.target.files[0]);
+        reader.onload = function(){
+            document.getElementById("img_original").src = this.result;
+        };
+    };
+    document.getElementById("btn_use_ptf").onclick = function() {
+        showProcessing(1);
+        setTimeout(function() {
+        var width = canvas.width;
+        var height = canvas.height;
+        // read original
+        context.drawImage(document.getElementById("img_original"), 0, 0);
+        var original = context.getImageData(0, 0, width, height);
+        
+        var result = context.createImageData(width, height);
+        var scale = Number(document.getElementById("input_num_ptf_scale").value);
+        var ptf_ss = Number(document.getElementById("input_num_ptf_ss").value);
+        var ptf_sr = Number(document.getElementById("input_num_ptf_sr").value);
+        var pyramids = pyramid_texture_filtering(width, height, original.data, result.data, ptf_ss, ptf_sr, scale);
+        
+        var container_g = document.getElementById('g_pyramid_container');
+        container_g.innerHTML = '';
+        var container_l = document.getElementById('l_pyramid_container');
+        container_l.innerHTML = '';
+        
+        // var container_ru = document.getElementById('ru_pyramid_container');
+        // container_ru.innerHTML = '';
+        var container_ri = document.getElementById('ri_pyramid_container');
+        container_ri.innerHTML = '';
+        var container_rc = document.getElementById('rc_pyramid_container');
+        container_rc.innerHTML = ''; 
+        var container_r = document.getElementById('r_pyramid_container');
+        container_r.innerHTML = '';
+          
+        pyramids.gaussian.forEach((level, i) => {
+            updateCanvas(container_g, `gaussian-${i}`, level.image, level.width, level.height);
+          });
+        pyramids.laplacian.forEach((level, i) => {
+            updateCanvas(container_l, `laplacian-${i}`, level.image, level.width, level.height);
+        });
+        
+        // pyramids.R_upsampled.forEach((level, i) => {
+        //     updateCanvas(container_ru, `R_upsampled-${i}`, level.image, level.width, level.height);
+        // });
+        pyramids.R_intermediate.forEach((level, i) => {
+            updateCanvas(container_ri, `R_intermediate-${i}`, level.image, level.width, level.height);
+        });
+        pyramids.R_combined.forEach((level, i) => {
+            updateCanvas(container_rc, `R_combined-${i}`, level.image, level.width, level.height);
+        });
+        pyramids.results.forEach((level, i) => {
+            updateCanvas(container_r, `results-${i}`, level.image, level.width, level.height);
+        });
+          
+        context.putImageData(result, 0, 0);
+        document.getElementById("img_result").src = canvas.toDataURL();
+          
+        showProcessing(0);
+      }, 0);
+    };
+    document.getElementById("img_original").src = "https://cdn.glitch.com/1214143e-0c44-41fb-b1ad-e9aa3347cdaa%2Frock.png?v=1562148154890";
+};
+</script>
+  
+</head>
+<body onload="init()">
+  <h2>Final Assignment for Visual Media (2024)</h2>
+  <h3>Pyramid Texture Filtering</h3>
+   <ul>
+     <li>This is the demo webpage for Visual Media (2024) final assignment.</li>
+     <li>Pyramid Texture Filtering Qing Zhang,  Hao Jiang,  Yongwei Nie,  Wei-Shi Zheng </li>
+     <li>ACM Transactions on Graphics (Proceedings of SIGGRAPH 2023) https://rewindl.github.io/pyramid_texture_filtering/</li>
+  </ul>
+  <table><tr valign="top">
+    <td align="center"><img id="img_original" crossorigin="anonymous"><br>Original</td>
+    <td align="center"><img id="img_result"><br>Result</td>
+  </tr></table>
+  <ul>
+    <li>Load Image: <input type="file" id="input_file_original" accept="image/*"></li>
+
+    <li>Downsampling rate (scale): <input type="number" id="input_num_ptf_scale" step="0.1" min="0.1" max="0.9" value="0.5"></li>
+    <li>Sigma space (JBF): <input type="number" id="input_num_ptf_ss" step="1" min="1" value="10"></li>
+    <li>(Normalized) Sigma range (JBF): <input type="number" id="input_num_ptf_sr" step="0.01" min="0.01" value="0.07"></li>
+    <li><button id="btn_use_ptf">Apply Pyramid Texture Filtering</button> (The calculation may take over 30s depending on the size of parameters.)</li>
+  </ul>
+  
+  <h3>Detailed Process of Pyramid Texture Filtering</h3>
+  <ul>
+    <li>Gaussian Pyramid</li>
+    <div id="g_pyramid_container"></div>
+    <li>Laplacian Pyramid</li>
+    <div id="l_pyramid_container"></div>
+    <li>After Joint Bilateral Upsampling</li>
+    <div id="ri_pyramid_container"></div>
+    <li>Add with Laplacian pyramid image</li>
+    <div id="rc_pyramid_container"></div>
+    <li>Results after Joint Bilateral Filtering</li>
+    <div id="r_pyramid_container"></div>
+  </ul>
+</body>
+</html>
